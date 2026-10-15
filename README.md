@@ -3,7 +3,7 @@
 An Elixir/OTP implementation of the git.pp fold, written **from the public
 spec only** (doc-only discipline): `DESIGN.md`, `docs/CHECKPOINT-V2.md`, and
 the witness-freshness formula in `docs/ENGINEERING.md` of
-[SuperInstance/git.pp-ng](https://github.com/SuperInstance/git.pp-ng). The
+[patchwork-quilt/git.pp-ng](https://github.com/patchwork-quilt/git.pp-ng). The
 TypeScript and Python sources were never read; the Python referee was used
 only as the harness uses it — a black-box oracle that computes expected
 outputs at run time.
