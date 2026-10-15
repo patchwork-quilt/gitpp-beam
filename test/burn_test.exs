@@ -4,7 +4,7 @@ defmodule Gitpp.BurnTest do
   alias Gitpp.{Project, ProjectSupervisor}
 
   # The frozen poc-quilt-1 record set (public: conformance/live-records.json
-  # in SuperInstance/git.pp-ng).
+  # in patchwork-quilt/git.pp-ng).
   @records_json """
   [
     {"id":"genesis","parents":[],"kind":"task","effects":{"project":"poc-quilt-1","status":"open"}},
