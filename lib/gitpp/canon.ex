@@ -96,6 +96,13 @@ defmodule Gitpp.Canon do
   def encode(true), do: "true"
   def encode(false), do: "false"
   def encode(nil), do: "null"
+
+  # :json.decode on OTP 27 maps a JSON null to the atom :null, not to nil.
+  # Without this clause any record carrying an explicit null crashes with a
+  # FunctionClauseError -- and the port's own fixtures never carry a
+  # null-valued key, so nothing caught it. The cross-port cases are the
+  # first records that do.
+  def encode(:null), do: "null"
   def encode(v) when is_integer(v) do
     # is_integer/1 is true for bignums, so this clause wins over is_float/1
     # and leaf_number/1 never runs. In [1e16, 1e21) the value is still an
@@ -107,9 +114,14 @@ defmodule Gitpp.Canon do
 
   def encode!(v), do: v |> encode() |> IO.iodata_to_binary()
 
-  # Python json string escaping with ensure_ascii=True: ", \, the short
-  # escapes, and every code point outside 0x20..0x7E as \uXXXX (surrogate
-  # pairs for non-BMP).
+  # Python json string escaping with ensure_ascii=FALSE, which is what the
+  # spec requires: ", \, the short escapes, and CONTROL characters as
+  # \uXXXX. Every other code point is emitted literally as UTF-8.
+  #
+  # This previously escaped everything outside 0x20..0x7E, which is
+  # ensure_ascii=TRUE -- and the spec explicitly forbids it. It made the
+  # port disagree with the pinned case-4 leaf, and test/canon_test.exs:30
+  # asserted the wrong answer, so the suite protected the defect.
   defp encode_string(s) do
     escaped =
       for <<cp::utf8 <- s>>, into: "" do
@@ -121,7 +133,7 @@ defmodule Gitpp.Canon do
           ?\t -> "\\t"
           0x08 -> "\\b"
           0x0C -> "\\f"
-          cp when cp < 0x20 or cp > 0x7E -> unicode_escape(cp)
+          cp when cp < 0x20 -> unicode_escape(cp)
           cp -> <<cp::utf8>>
         end
       end
@@ -168,7 +180,14 @@ defmodule Gitpp.Canon do
   defp render_repr(digits, decpt) do
     exp = decpt - 1
 
-    if exp < -4 or exp >= 17 do
+    # CPython's repr switches to scientific notation when the decimal
+    # exponent is < -4 or >= 16. This said 17, which left the whole
+    # [1e16, 1e17) band emitting integer digits -- and then the integer
+    # branch below appended ".0", producing "10000000000000000.0", a
+    # malformed number string that no other port emits and that does not
+    # round-trip. One character, and it is the difference between a
+    # conformant leaf and a corrupt one.
+    if exp < -4 or exp >= 16 do
       mantissa =
         case digits do
           <<d>> -> <<d>>
