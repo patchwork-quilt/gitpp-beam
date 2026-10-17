@@ -16,6 +16,12 @@ defmodule Gitpp.Canon do
   """
 
   @json_safe_integer 9_007_199_254_740_991
+  # The §3 ENCODING boundary. Distinct from @json_safe_integer above, which
+  # decides whether an integer survives a float64 round trip. 2**53-1 is the
+  # right constant for decoding and the wrong one for encoding: the spec's
+  # integer band ends at 1e16, which is ~9.9e14 higher. Reusing one for both
+  # sent every value in [2**53, 1e16) down the integer path.
+  @spec_integer_band 1.0e16
 
   # ------------------------------------------------------------------ ingest
 
@@ -90,7 +96,13 @@ defmodule Gitpp.Canon do
   def encode(true), do: "true"
   def encode(false), do: "false"
   def encode(nil), do: "null"
-  def encode(v) when is_integer(v), do: Integer.to_string(v)
+  def encode(v) when is_integer(v) do
+    # is_integer/1 is true for bignums, so this clause wins over is_float/1
+    # and leaf_number/1 never runs. In [1e16, 1e21) the value is still an
+    # integer here but §3 requires scientific, so route it through the same
+    # rule rather than printing exact digits.
+    if abs(v) >= @spec_integer_band, do: leaf_number(v * 1.0), else: Integer.to_string(v)
+  end
   def encode(v) when is_float(v), do: leaf_number(v)
 
   def encode!(v), do: v |> encode() |> IO.iodata_to_binary()
@@ -137,7 +149,7 @@ defmodule Gitpp.Canon do
   def leaf_number(v) when is_float(v) do
     cond do
       v == 0.0 -> "0"
-      v == trunc(v) and abs(v) < 1.0e21 -> Integer.to_string(trunc(v))
+      v == trunc(v) and abs(v) < @spec_integer_band -> Integer.to_string(trunc(v))
       true -> python_repr(v)
     end
   end

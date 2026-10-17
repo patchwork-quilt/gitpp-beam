@@ -1,0 +1,38 @@
+name: leaf conformance
+
+# THIS PORT HAS NOT BEEN IN THE CROSS-PORT LEAF FUZZ. It diverges from the
+# spec on two different number boundaries (see the pinned cases below and
+# https://github.com/patchwork-quilt/gitpp-beam/issues/2), and nothing in CI
+# would have noticed.
+#
+# These are the values the divergence is made of. They are pinned here so a
+# regression is a red build rather than a stale issue.
+#
+# §3, verbatim:
+#   | finite `float` with integral value but `|v| >= 1e16` | scientific |
+#   | `int` (JSON integer literal, `|v| >= 1e16`)            | the float64 it becomes |
+#
+# canon.ex:140 currently tests 1.0e21 where §3 says 1e16, and canon.ex:18
+# uses @json_safe_integer (2**53-1) for the ENCODING boundary when 2**53-1
+# is the DECODING one.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  spec-pinned:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: '27'
+          elixir-version: '1.17'
+      - name: mix deps.get
+        run: mix deps.get
+      - name: existing suite
+        run: mix test
+      - name: §3 number-boundary cases
+        run: mix test test/spec_boundary_test.exs
