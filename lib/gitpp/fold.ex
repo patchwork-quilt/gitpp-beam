@@ -49,30 +49,87 @@ defmodule Gitpp.Fold do
   end
 
   # Kahn's algorithm, smallest-id-first (Unicode code point == UTF-8 byte
-  # order, so plain binary comparison is the code-point order). A record is
-  # ready when every parent is already applied; records that never become
-  # ready (missing parent, cycle member, blocked behind either) are orphans.
+  # order, so plain binary comparison is the code-point order).
+  #
+  # SPEC 5.5 needs THREE clauses, and the two obvious single-clause rules
+  # each get a different case wrong:
+  #
+  #   rule A  "any parent id is missing from the set"   correct on a
+  #                                                        record whose own
+  #                                                        parent is absent,
+  #                                                        WRONG on an orphan's
+  #                                                        descendants
+  #   rule B  "anything Kahn never emitted"               correct on cycle
+  #                                                        descendants, WRONG
+  #                                                        on an orphan's
+  #                                                        descendants
+  #   rule U3 all three clauses together                 correct on both
+  #
+  # The bug this fixes was rule B, and it was SILENT: the fold returned a
+  # confident, well-formed, WRONG answer rather than crashing.
+  #
+  #   [orph (parent "ghost", absent), child (parent "orph")]
+  #
+  #   other ports : order ["child"], orphans ["orph"], state {"z": 7}
+  #   this port   : order [],        orphans ["child","orph"], state {}
+  #
+  # The child's effect was silently LOST. 5.5 says the orphan's descendants
+  # are NOT auto-orphaned -- the fold runs on what stands.
   defp application_order(idx) do
-    do_kahn(idx, MapSet.new(), [])
+    # Clause 1: the APPLIED SET. A record whose OWN parent id does not
+    # resolve is not applied. NOTHING PROPAGATES DOWNWARD: an absent
+    # parent blocks only the record that NAMES it.
+    applicable =
+      Map.new(idx, fn {id, r} ->
+        {id, Enum.all?(r["parents"], &Map.has_key?(idx, &1))}
+      end)
+
+    {order, ordered} = do_kahn(idx, applicable, MapSet.new(), [])
+
+    # Clause 2: the orphans are the records that are not applied, plus
+    # the ones that could not be ordered, plus the ones whose parent is
+    # applied but never ordered -- a cycle's descendants, which 5.4
+    # excludes from the order and 5.5 requires in the orphan list.
+    orphans =
+      idx
+      |> Map.keys()
+      |> Enum.filter(fn id ->
+        not applicable[id] or
+          not MapSet.member?(ordered, id) or
+          Enum.any?(idx[id]["parents"], fn p ->
+            applicable[p] and not MapSet.member?(ordered, p)
+          end)
+      end)
+      |> Enum.sort()
+
+    {order, orphans}
   end
 
-  defp do_kahn(idx, applied, acc) do
+  # Kahn over the APPLIED set.
+  #
+  # The readiness test counts only the parents that are THEMSELVES applied.
+  # A parent that is present but not applied -- an orphan -- does NOT
+  # block its child, because the orphan is excluded from the fold and so
+  # the link is dropped. A parent that is absent does not block either.
+  defp do_kahn(idx, applicable, applied, acc) do
     ready =
       idx
       |> Enum.filter(fn {id, r} ->
-        not MapSet.member?(applied, id) and
-          Enum.all?(r["parents"], &MapSet.member?(applied, &1))
+        applicable[id] and
+          not MapSet.member?(applied, id) and
+          Enum.all?(r["parents"], fn p ->
+            not applicable[p] or MapSet.member?(applied, p)
+          end)
       end)
       |> Enum.map(&elem(&1, 0))
       |> Enum.sort()
 
     case ready do
       [] ->
-        orphans = idx |> Map.keys() |> Enum.reject(&MapSet.member?(applied, &1)) |> Enum.sort()
-        {Enum.reverse(acc), orphans}
+        {Enum.reverse(acc), applied}
 
       [next | _] ->
-        do_kahn(idx, MapSet.put(applied, next), [next | acc])
+        do_kahn(idx, applicable, MapSet.put(applied, next), [next | acc])
     end
   end
 
@@ -80,9 +137,19 @@ defmodule Gitpp.Fold do
   # applied record is applied earlier, so one pass suffices).
   defp ancestor_sets(idx, order) do
     Enum.reduce(order, %{}, fn id, acc ->
+      # A parent that is not in the APPLIED set contributes NOTHING -- not
+      # even itself. An orphan is excluded from the fold, so it is not an
+      # ancestor of anything that folds.
+      #
+      # The previous version did Map.fetch!(acc, p), which RAISES when the
+      # parent is an orphan. So the d12 case did not merely lose the
+      # child's effect -- it would have crashed here.
       anc =
         Enum.reduce(idx[id]["parents"], MapSet.new(), fn p, s ->
-          s |> MapSet.put(p) |> MapSet.union(Map.fetch!(acc, p))
+          case Map.fetch(acc, p) do
+            {:ok, parents} -> MapSet.put(s, p) |> MapSet.union(parents)
+            :error -> s
+          end
         end)
 
       Map.put(acc, id, anc)

@@ -31,7 +31,7 @@ defmodule Gitpp.Canon do
   structurally preserved.
   """
   def float64_canonicalise(v) when is_integer(v) do
-    if abs(v) > @json_safe_integer, do: v * 1.0, else: v
+    if abs(v) > @json_safe_integer, do: bignum_to_float(v), else: v
   end
 
   def float64_canonicalise(v) when is_map(v) do
@@ -40,6 +40,29 @@ defmodule Gitpp.Canon do
 
   def float64_canonicalise(v) when is_list(v), do: Enum.map(v, &float64_canonicalise/1)
   def float64_canonicalise(v), do: v
+
+  # A bignum to the nearest IEEE-754 double, ROUNDED TO NEAREST EVEN.
+  #
+  # OTP 27's own bignum -> double conversion -- via `v * 1.0`, via
+  # `:erlang.float/1`, and via `v / 1` alike -- rounds TOWARD ZERO
+  # instead of to nearest-even, so it lands one ulp away from the
+  # correctly-rounded double. CPython, and every other port in the
+  # fleet, round to nearest-even. The same JSON text therefore encoded
+  # to different bytes on two platforms, which is a LEAF divergence
+  # rather than a formatting one.
+  #
+  #   v = 30363914016017520000
+  #     BEAM  v * 1.0   ->  3.0363914016017523e19
+  #     CPython          ->  3.036391401601752e+19
+  #
+  # The fix goes through the DECIMAL STRING, which is exact for a
+  # bignum, and parses it with binary_to_float -- which is strtod, and
+  # strtod is correctly rounded. The exact decimal digits are the
+  # bridge between a BEAM that cannot round correctly and a C library
+  # that can.
+  defp bignum_to_float(v) do
+    :erlang.binary_to_float(Integer.to_string(v) <> ".0")
+  end
 
   # ------------------------------------------------------------- value class
 
@@ -50,9 +73,29 @@ defmodule Gitpp.Canon do
   (recursively). Assumes the value is already float64-canonicalised.
   """
   def value_key(v) when is_boolean(v), do: {:num, if(v, do: 1.0, else: 0.0)}
-  def value_key(v) when is_integer(v), do: {:num, v * 1.0}
+  # The same one-ulp problem, and the same fix. value_key is the
+  # CONFLICT-DISTINCTNESS key, so a value that differs by one ulp is a
+  # value the fold treats as different -- and a fold that disagrees
+  # with the reference about whether two values are the same is a
+  # divergence that no leaf test would ever see.
+  def value_key(v) when is_integer(v) do
+    if abs(v) > @json_safe_integer, do: {:num, bignum_to_float(v)}, else: {:num, v * 1.0}
+  end
   def value_key(v) when is_float(v), do: {:num, v}
   def value_key(nil), do: :null
+
+  # :json.decode on OTP 27 maps a JSON null to the atom :null, not to nil.
+  #
+  # The encode path already has a clause for :null. The value_key path
+  # did not, and the two are parallel -- so the SAME fix was applied to
+  # one and not the other. That is the shape of half the defects in this
+  # project: a fix that reached one of two places that needed it.
+  #
+  # It is reachable from a plain derive/1, and it is SILENT in the worst
+  # way: state_and_conflicts/3 calls distinct_values?/3 for EVERY
+  # candidate key, not only for contested ones, so an UNCONTESTED null
+  # value is enough to crash the whole fold.
+  def value_key(:null), do: :null
   def value_key(v) when is_binary(v), do: {:str, v}
 
   def value_key(v) when is_list(v), do: {:list, Enum.map(v, &value_key/1)}
