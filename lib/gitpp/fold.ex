@@ -2,8 +2,8 @@ defmodule Gitpp.Fold do
   @moduledoc """
   The git.pp fold, implemented from DESIGN.md only (doc-only discipline: this
   port was written against the public DESIGN.md + docs/CHECKPOINT-V2.md +
-  the witness-freshness formula in docs/ENGINEERING.md, never against the
-  TypeScript or Python sources).
+  docs/FRONTIER-CHECKPOINTS.md + the witness-freshness formula in
+  docs/ENGINEERING.md, never against the TypeScript or Python sources).
 
   A record is a map with binary keys as decoded from JSON:
   "id", "parents", "kind", "effects", "reason" (some optional).
@@ -240,28 +240,57 @@ defmodule Gitpp.Fold do
     end)
   end
 
-  # ------------------------------------------------- checkpoints (v1 + v2)
+  # ------------------------------------- checkpoints (v1 + v2 + frontier)
 
   @doc """
   checkpoint_root(records, at) -> lowercase hex SHA-256 closure root, or nil
   when the closure is incomplete (docs/CHECKPOINT-V2.md).
+
+  Frontier form (docs/FRONTIER-CHECKPOINTS.md): `at` may be a LIST of record
+  ids, and the root is computed by the identical construction over the UNION
+  of the members' ancestor closures — v2's root was always a digest of a set
+  of ids; the singleton closure was just the set it happened to be computed
+  over. A one-member list therefore digests byte-identically to the string
+  form. A malformed array (empty, duplicate members, non-string members)
+  yields nil.
   """
   def checkpoint_root(records, at) do
     idx = records |> Enum.map(&canonical_record/1) |> index()
 
-    case closure(idx, at) do
-      nil ->
-        nil
+    with {:ok, members} <- frontier_members(at),
+         %MapSet{} = ids <- closure_multi(idx, members) do
+      lines =
+        ids
+        |> Enum.sort()
+        |> Enum.map(fn id -> id <> ":" <> leaf(idx[id]) end)
 
-      ids ->
-        lines =
-          ids
-          |> Enum.sort()
-          |> Enum.map(fn id -> id <> ":" <> leaf(idx[id]) end)
-
-        :crypto.hash(:sha256, Enum.join(lines, "\n")) |> Base.encode16(case: :lower)
+      :crypto.hash(:sha256, Enum.join(lines, "\n")) |> Base.encode16(case: :lower)
+    else
+      _ -> nil
     end
   end
+
+  # Normalise a checkpoint `at` — string form (v2) or frontier array form —
+  # to a member list, or :error if the form is malformed: an empty array,
+  # duplicate members, or non-string members. Readers dispatch structurally
+  # on the type, and a malformed array fails safe the same way in every
+  # caller. A non-string scalar keeps the historical String() coercion of
+  # the singleton path.
+  defp frontier_members(at) when is_binary(at), do: {:ok, [at]}
+
+  defp frontier_members(at) when is_list(at) do
+    cond do
+      at == [] -> :error
+      Enum.any?(at, &(not is_binary(&1))) -> :error
+      length(Enum.uniq(at)) != length(at) -> :error
+      true -> {:ok, at}
+    end
+  end
+
+  defp frontier_members(at) when is_integer(at) or is_float(at),
+    do: {:ok, [to_string(at)]}
+
+  defp frontier_members(_at), do: :error
 
   # The set {at} + all transitive parents present in the index; nil if any
   # referenced ancestor (or at itself) is absent.
@@ -271,6 +300,17 @@ defmodule Gitpp.Fold do
     else
       nil
     end
+  end
+
+  # Union of the ancestor closures of every member; nil if any member is
+  # absent or any member's closure is incomplete.
+  defp closure_multi(idx, members) do
+    Enum.reduce_while(members, MapSet.new(), fn member, acc ->
+      case closure(idx, member) do
+        nil -> {:halt, nil}
+        %MapSet{} = ids -> {:cont, MapSet.union(acc, ids)}
+      end
+    end)
   end
 
   defp walk_closure(_idx, [], acc), do: acc
@@ -306,6 +346,11 @@ defmodule Gitpp.Fold do
       float64 number domain.
     * with "closureRoot" -> "VERIFIED" | "STATE-ONLY" | "MISMATCH"
       (docs/CHECKPOINT-V2.md).
+    * frontier form (docs/FRONTIER-CHECKPOINTS.md): `at` may be a LIST of
+      ids; the covered set is the union of the members' closures, recomputed
+      within the presented set — state is derive(covered).state and the root
+      is the v2 construction over the union. A malformed array (empty,
+      duplicate members, non-string members) answers MISMATCH / false.
   """
   def verify_checkpoint(records, checkpoint) do
     idx = records |> Enum.map(&canonical_record/1) |> index()
@@ -313,8 +358,11 @@ defmodule Gitpp.Fold do
     claimed = checkpoint["state"]
 
     state_matches =
-      is_binary(at) and Map.has_key?(idx, at) and is_map(claimed) and
-        closure_state_matches?(idx, at, claimed)
+      is_map(claimed) and
+        case frontier_members(at) do
+          {:ok, members} -> closure_state_matches?(idx, members, claimed)
+          :error -> false
+        end
 
     if Map.has_key?(checkpoint, "closureRoot") and checkpoint["closureRoot"] != nil do
       cond do
@@ -327,8 +375,8 @@ defmodule Gitpp.Fold do
     end
   end
 
-  defp closure_state_matches?(idx, at, claimed) do
-    case closure(idx, at) do
+  defp closure_state_matches?(idx, members, claimed) do
+    case closure_multi(idx, members) do
       nil ->
         false
 

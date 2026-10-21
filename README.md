@@ -1,7 +1,8 @@
 # git.pp on the BEAM — a third fold port (Elixir spike)
 
 An Elixir/OTP implementation of the git.pp fold, written **from the public
-spec only** (doc-only discipline): `DESIGN.md`, `docs/CHECKPOINT-V2.md`, and
+spec only** (doc-only discipline): `DESIGN.md`, `docs/CHECKPOINT-V2.md`,
+`docs/FRONTIER-CHECKPOINTS.md`, and
 the witness-freshness formula in `docs/ENGINEERING.md` of
 [patchwork-quilt/git.pp-ng](https://github.com/patchwork-quilt/git.pp-ng). The
 TypeScript and Python sources were never read; the Python referee was used
@@ -11,19 +12,27 @@ outputs at run time.
 **Result: the full conformance corpus passes.**
 
 ```
-derive:    863/863 cases identical
-verify:    1029/1029 checkpoint probes identical (v1 bool + v2 three-way)
-freshness: 3231/3231 witness-freshness checks identical
-roots:     16290/16290 closure-root digests identical
+derive:    898/898 cases identical
+verify:    1056/1056 checkpoint probes identical (v1 bool + v2 three-way)
+freshness: 3259/3259 witness-freshness checks identical
+roots:     16574/16574 closure-root digests identical
 three-way pins: 6/6 (VERIFIED / STATE-ONLY / MISMATCH semantics)
 float fuzz: 10018 doubles, 0 leaf-encoding mismatches vs CPython
 ```
+
+Frontier checkpoints (the array form of `at`) were **missing** from this
+port when the corpus grew them: every frontier verify probe diverged
+(MISMATCH / false where the referee answered VERIFIED / STATE-ONLY / true).
+They are implemented now — the covered set is the union of the members'
+ancestor closures, digested by the identical v2 construction — and the
+corpus passes with zero divergences.
 
 ## Shape
 
 - `Gitpp.Fold` — the fold as a pure function: records → state, conflicts
   (winner + preserved losers), application order, orphans; plus
-  `verify_checkpoint/2` (v1 + v2), `checkpoint_root/2`, `witness_freshness/1`.
+  `verify_checkpoint/2` (v1 + v2 + frontier array form), `checkpoint_root/2`,
+  `witness_freshness/1`. There is no delta-derivation path in this port.
 - `Gitpp.Canon` — the byte-level dialect layer: float64 canonicalisation at
   ingest (DESIGN.md §5), CPython `json.dumps` canonical encoding
   (sort_keys / ensure_ascii / separators), and the pinned leaf-number
