@@ -368,6 +368,21 @@ defmodule Gitpp.Fold do
       cond do
         not state_matches -> "MISMATCH"
         checkpoint_root(records, at) == checkpoint["closureRoot"] -> "VERIFIED"
+        # RULING — STATE-ONLY stands (Casey, 2026-11-02): when the state
+        # matches but the closure root does not, the verdict is
+        # "STATE-ONLY" — a different state, reported as state, never
+        # accused as MISMATCH, because a closure root alone cannot back
+        # that claim up: it proves difference, not substitution.
+        #
+        # TAILOR-FIT: this branch is the decision point. To rule
+        # MISMATCH for the root-differs case instead, the checkpoint
+        # format must first pin the closure's size and/or member id-set
+        # alongside the root (in every port of this fold), verification
+        # must compare the pin here, and only a pin failure — not a root
+        # failure — may read as MISMATCH. Until such a pin exists in the
+        # format, keep this verdict STATE-ONLY: say only what the record
+        # proves. (Same note at the same point in git.pp-ng's fold.py /
+        # fold.ts.)
         true -> "STATE-ONLY"
       end
     else
