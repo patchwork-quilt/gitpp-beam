@@ -1,42 +1,32 @@
 defmodule Gitpp.OrphanDescendantTest do
   @moduledoc """
-  Spec §5.5, pinned as executable assertions.
+  Orphan semantics, pinned as executable assertions.
 
-  §5.5 says two things that are easy to get backwards:
+  THE RULE (git.pp-ng v0.2.0, the issue-#38 model): a record is an
+  orphan if any of its parents is not in the set — and the exclusion
+  PROPAGATES: an orphan's descendants are orphans too, as is anything
+  in or behind a parent cycle. The fold runs on what stands AFTER
+  the exclusion, and every excluded record is named in the orphans.
 
-    "A record is an orphan if any of its parents is not in the applied
-     set."                                  -- the orphan's OWN parent
-    "The orphan's descendants are NOT auto-orphaned (the fold runs on
-     what stands)."                         -- and nothing propagates
-                                               DOWNWARD
+  This port originally pinned the opposite reading of §5.5 — "the
+  orphan's descendants are NOT auto-orphaned" — under which a
+  missing-parent record's child still derived. The corpus case
+  prop-ghost is the discriminating evidence against that reading:
+  g (parent "missing") and h (parent g) are BOTH orphans in the
+  reference fold, and h's effect never lands. Two cases below
+  ("desc of missing", "missing AND cycle") carry the corrected
+  expectations; the other eleven agree under both readings, because
+  cycle exclusion propagated even in the old model.
 
-  No single natural rule satisfies both. Two of them each get a
-  different case wrong:
-
-    rule A  "any parent id is missing from the set"    correct on a
-                                                          record whose own
-                                                          parent is absent,
-                                                          WRONG on an
-                                                          orphan's descendants
-    rule B  "anything Kahn never emitted"              correct on cycle
-                                                          descendants, WRONG
-                                                          on an orphan's
-                                                          descendants
-    rule U3 all three clauses together                correct on both
-
-  The 13 cases below are the DISCRIMINATING SET, and they are the same
-  13 the C, C# and Perl ports carry -- so a port that passes them
-  agrees with the fleet, and a port that fails them names the rule it
-  got wrong.
-
-  The bug these caught was SILENT, which is the worst kind: the fold
-  returned a confident, well-formed, WRONG answer instead of crashing.
+  The failure mode this guards is SILENT: a fold that returns a
+  confident, well-formed, WRONG answer instead of crashing.
 
       [orph (parent "ghost", absent), child (parent "orph")]
 
-      other ports : order ["child"], orphans ["orph"],  state {"z": 7}
-      this port   : order [],         orphans ["child","orph"], state {}
+      the rule     : order [],        orphans ["child","orph"], state {}
+      old reading  : order ["child"], orphans ["orph"],        state {"y": 2}
   """
+
   use ExUnit.Case, async: true
   alias Gitpp.Fold
 
@@ -60,11 +50,13 @@ defmodule Gitpp.OrphanDescendantTest do
   end
 
   test "desc of missing" do
-    # The load-bearing case. The kid's parent EXISTS (it is orphaned, not
-    # absent), so the kid is orderable and is NOT an orphan. Rule B
-    # regresses this.
+    # The load-bearing case, CORRECTED 2026-11-02: the kid's parent
+    # exists but is itself an orphan, and the exclusion propagates —
+    # the kid is an orphan too and its effect never lands. This is
+    # the corpus's prop-ghost shape. (The previous expectation — the
+    # kid derives — pinned the superseded reading.)
     check([rec("orph", ["ghost"], %{"x" => 1}), rec("kid", ["orph"], %{"y" => 2})],
-      ["orph"], %{"y" => 2})
+      ["kid", "orph"], %{})
   end
 
   test "2-cycle" do
@@ -115,9 +107,12 @@ defmodule Gitpp.OrphanDescendantTest do
   end
 
   test "missing AND cycle" do
+    # mk descends from m (missing parent): propagation excludes it
+    # too — corrected alongside "desc of missing" (it previously
+    # derived {"w" => 2}).
     check([rec("ca", ["cb"], %{}), rec("cb", ["ca"], %{}),
            rec("m", ["ghost"], %{"q" => 1}), rec("mk", ["m"], %{"w" => 2})],
-      ["ca", "cb", "m"], %{"w" => 2})
+      ["ca", "cb", "m", "mk"], %{})
   end
 
   test "the §5.5 counterexample, spelled out" do

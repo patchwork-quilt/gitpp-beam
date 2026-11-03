@@ -26,12 +26,13 @@ defmodule Gitpp.CanonTest do
     assert Canon.encode!(%{"b" => 1, "a" => [true, nil, "x\ny"]}) ==
              ~S({"a": [true, null, "x\ny"], "b": 1})
 
-    # ensure_ascii=FALSE (which the spec requires): non-ASCII is emitted
-    # LITERALLY as UTF-8, not as \uXXXX. This assertion previously pinned
-    # the ensure_ascii=TRUE behaviour, which the spec forbids, so the test
-    # was protecting the defect. Verified against the pinned case-4 leaf:
-    #   {"k": "é😀"}  ->  sha256 83d31b81…e597
-    assert Canon.encode!(%{"k" => "é😀"}) == ~S({"k": "é😀"})
+    # ensure_ascii=TRUE (which §3 requires): non-ASCII is escaped as
+    # \uXXXX, surrogate pairs above the BMP. This assertion previously
+    # pinned literal UTF-8 emission under the claim the spec forbids
+    # escaping; the "pinned case-4 leaf" it cited (83d31b81…) was this
+    # port's own output. The reference leaf for the 🚀 record is
+    # 9bd5b9b1…, and the corpus's edge-unicode family discriminates.
+    assert Canon.encode!(%{"k" => "é😀"}) == ~S({"k": "\u00e9\ud83d\ude00"})
   end
 
   test "value equality follows Python: True == 1 == 1.0, False == 0" do

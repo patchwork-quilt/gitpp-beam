@@ -21,7 +21,11 @@ defmodule Gitpp.SpecBoundaryTest do
   end
 
   describe "§3 integral float band" do
-    # |v| < 1e16 and integral -> exact integer digits
+    # Integral and |v| < 1e21 -> exact integer digits (CHECKPOINT-V2.md
+    # §3; the band was RULED upstream 2026-10-20 — "1e21 stands", the
+    # 1e16 reading reverted). This suite previously pinned the reverted
+    # reading (scientific from 1e16 up); those assertions protected the
+    # defect, and the LEAF-BAND corpus family is the receipt.
     test "1e15 is integer form" do
       assert Canon.leaf_number(1.0e15) == "1000000000000000"
     end
@@ -30,18 +34,16 @@ defmodule Gitpp.SpecBoundaryTest do
       assert Canon.leaf_number(9.007199254740992e15) == "9007199254740992"
     end
 
-    # |v| >= 1e16 and integral -> scientific. THIS is the band the port gets
-    # wrong: canon.ex:140 tests 1.0e21.
-    test "1e16 is SCIENTIFIC, not integer digits" do
-      assert Canon.leaf_number(1.0e16) == "1e+16"
+    test "1e16 is integer form, not scientific" do
+      assert Canon.leaf_number(1.0e16) == "10000000000000000"
     end
 
-    test "1e18 is SCIENTIFIC" do
-      assert Canon.leaf_number(1.0e18) == "1e+18"
+    test "1e18 is integer form" do
+      assert Canon.leaf_number(1.0e18) == "1000000000000000000"
     end
 
-    test "7.2e20 is SCIENTIFIC" do
-      assert Canon.leaf_number(7.2e20) == "7.2e+20"
+    test "7.2e20 is integer form (exact digits of the double)" do
+      assert Canon.leaf_number(7.2e20) == "720000000000000000000"
     end
   end
 

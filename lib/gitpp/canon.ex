@@ -16,12 +16,15 @@ defmodule Gitpp.Canon do
   """
 
   @json_safe_integer 9_007_199_254_740_991
-  # The §3 ENCODING boundary. Distinct from @json_safe_integer above, which
-  # decides whether an integer survives a float64 round trip. 2**53-1 is the
-  # right constant for decoding and the wrong one for encoding: the spec's
-  # integer band ends at 1e16, which is ~9.9e14 higher. Reusing one for both
-  # sent every value in [2**53, 1e16) down the integer path.
-  @spec_integer_band 1.0e16
+  # The §3 leaf-encoding boundary. Distinct from @json_safe_integer above,
+  # which decides whether an integer survives a float64 round trip. The
+  # leaf band ends at 1e21 (CHECKPOINT-V2.md §3; ruled 2026-10-20 —
+  # "Leaf boundary RULING: 1e21 stands", the 1e16 reading reverted
+  # upstream): an integral double with |v| < 1e21 spells as its exact
+  # integer digits. This module previously carried 1.0e16 here, which
+  # sent every integral double in [1e16, 1e21) down the repr path and
+  # diverged from the reference leaf on the whole LEAF-BAND family.
+  @leaf_integer_band 1.0e21
 
   # ------------------------------------------------------------------ ingest
 
@@ -146,25 +149,75 @@ defmodule Gitpp.Canon do
   # null-valued key, so nothing caught it. The cross-port cases are the
   # first records that do.
   def encode(:null), do: "null"
-  def encode(v) when is_integer(v) do
-    # is_integer/1 is true for bignums, so this clause wins over is_float/1
-    # and leaf_number/1 never runs. In [1e16, 1e21) the value is still an
-    # integer here but §3 requires scientific, so route it through the same
-    # rule rather than printing exact digits.
-    if abs(v) >= @spec_integer_band, do: leaf_number(v * 1.0), else: Integer.to_string(v)
-  end
+  # Integers print as their exact digits — CPython's json.dumps of an
+  # int, and the leaf form of a leaf-domain integer alike. Values that
+  # needed the float64 domain were canonicalised at ingest (a JSON
+  # integer beyond 2**53-1 arrives here as a float, never as a bignum),
+  # and an integer produced from an integral double < 1e21 is exact by
+  # construction, so no band rerouting belongs here.
+  def encode(v) when is_integer(v), do: Integer.to_string(v)
   def encode(v) when is_float(v), do: leaf_number(v)
 
   def encode!(v), do: v |> encode() |> IO.iodata_to_binary()
 
-  # Python json string escaping with ensure_ascii=FALSE, which is what the
-  # spec requires: ", \, the short escapes, and CONTROL characters as
-  # \uXXXX. Every other code point is emitted literally as UTF-8.
+  # ------------------------------------------------------- json.dumps form
+
+  @doc """
+  CPython `json.dumps` of a value: sort_keys=True, ensure_ascii=True,
+  default separators (", ", ": "), integers as exact digits, floats in
+  repr form — NOT the leaf encoding (json.dumps(45.0) is "45.0"; an
+  integral double in [1e16, 1e21) is "1e+16", where the leaf spells the
+  exact digits). Used for the fold's duplicate-id index sort key: the
+  one place a whole-record serialisation must match the reference
+  byte-for-byte without leaf-number rewriting.
+  """
+  def dumps!(v), do: v |> encode_dumps() |> IO.iodata_to_binary()
+
+  def encode_dumps(v) when is_map(v) do
+    inner =
+      v
+      |> Enum.sort_by(fn {k, _} -> k end)
+      |> Enum.map(fn {k, val} -> [encode_string(k), ": ", encode_dumps(val)] end)
+      |> Enum.intersperse(", ")
+
+    ["{", inner, "}"]
+  end
+
+  def encode_dumps(v) when is_list(v) do
+    ["[", v |> Enum.map(&encode_dumps/1) |> Enum.intersperse(", "), "]"]
+  end
+
+  def encode_dumps(v) when is_binary(v), do: encode_string(v)
+  def encode_dumps(true), do: "true"
+  def encode_dumps(false), do: "false"
+  def encode_dumps(nil), do: "null"
+  def encode_dumps(:null), do: "null"
+  def encode_dumps(v) when is_integer(v), do: Integer.to_string(v)
+  def encode_dumps(v) when is_float(v), do: dumps_float(v)
+
+  # json.dumps of a float is repr: -0.0 keeps its sign here (the leaf
+  # collapses it to "0"; a serialisation may not).
+  defp dumps_float(v) do
+    if v == 0.0 do
+      <<sign::1, _rest::63>> = <<v::float-64>>
+      if sign == 1, do: "-0.0", else: "0.0"
+    else
+      python_repr(v)
+    end
+  end
+
+  # Python json string escaping with ensure_ascii=True, which is what
+  # §3 pins for the leaf construction (json.dumps(..., ensure_ascii=True,
+  # ...)): \", \\, the short escapes, and every code point outside
+  # 0x20..0x7E as \uXXXX (surrogate pairs above the BMP).
   #
-  # This previously escaped everything outside 0x20..0x7E, which is
-  # ensure_ascii=TRUE -- and the spec explicitly forbids it. It made the
-  # port disagree with the pinned case-4 leaf, and test/canon_test.exs:30
-  # asserted the wrong answer, so the suite protected the defect.
+  # This previously emitted non-ASCII literally as UTF-8, under a comment
+  # claiming the spec forbids ensure_ascii=True. It does not: §3 spells
+  # ensure_ascii=True, both reference ports implement it, and the
+  # "pinned" non-ASCII leaf this reading defended (83d31b81…) was this
+  # port's own output, not a cross-port value — the reference leaf for
+  # the same record is 9bd5b9b1…. The tests that pinned the literal
+  # reading are corrected in the same change that fixes this clause.
   defp encode_string(s) do
     escaped =
       for <<cp::utf8 <- s>>, into: "" do
@@ -177,7 +230,8 @@ defmodule Gitpp.Canon do
           0x08 -> "\\b"
           0x0C -> "\\f"
           cp when cp < 0x20 -> unicode_escape(cp)
-          cp -> <<cp::utf8>>
+          cp when cp < 0x7F -> <<cp::utf8>>
+          cp -> unicode_escape(cp)
         end
       end
 
@@ -204,7 +258,7 @@ defmodule Gitpp.Canon do
   def leaf_number(v) when is_float(v) do
     cond do
       v == 0.0 -> "0"
-      v == trunc(v) and abs(v) < @spec_integer_band -> Integer.to_string(trunc(v))
+      v == trunc(v) and abs(v) < @leaf_integer_band -> Integer.to_string(trunc(v))
       true -> python_repr(v)
     end
   end

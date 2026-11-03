@@ -3,8 +3,9 @@ defmodule Gitpp.Runner do
   Conformance runner: the BEAM twin of conformance/runner.ts. Reads a
   cases.json (as written by conformance/harness.py), runs the Elixir fold,
   and writes results in the same shape: per case, the derive output, the
-  verify_checkpoint answer for each probe, witness freshness, and the
-  closure-root digest for every applied id.
+  verify_checkpoint answer for each probe, witness freshness, the
+  closure-root digest for every applied id, and the retraction surface
+  (dispute statuses, retracted set, contested markings).
 
   Usage: mix run conformance/runner.exs -- <cases.json> <results.json>
   """
@@ -41,6 +42,7 @@ defmodule Gitpp.Runner do
           "derive" => derived,
           "verify" => verify,
           "freshness" => Fold.witness_freshness(records),
+          "retraction" => Fold.retraction_status(records),
           "roots" => roots
         }
       end)

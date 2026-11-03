@@ -45,14 +45,17 @@ scripts/conformance.sh /path/to/git.pp-ng-clone
 What just happened: the last line is the verdict — `BEAM CONFORMANCE:
 PASS` means this implementation, written from documents alone, agreed
 with the referee on every case the corpus holds. The current totals
-(2026-10-21, against the grown corpus):
+(2026-11-02, against git.pp-ng **v0.2.0** — the corpus that carries
+the retraction law):
 
 ```
-derive:    898/898 cases identical
-verify:    1056/1056 checkpoint probes identical (v1 bool + v2 three-way)
-freshness: 3259/3259 witness-freshness checks identical
-roots:     16574/16574 closure-root digests identical
+derive:    1211/1211 cases identical
+verify:    1215/1215 checkpoint probes identical (v1 bool + v2 three-way)
+freshness: 3679/3679 witness-freshness checks identical
+roots:     19474/19474 closure-root digests identical
+retraction: 302/302 dispute statuses, 8/8 contested markings identical
 three-way pins: 6/6 (VERIFIED / STATE-ONLY / MISMATCH semantics)
+retraction pins: 79/79 (RET_EXPECTED + RET_CONTESTED, held against this port)
 float fuzz: 10018 doubles, 0 leaf-encoding mismatches vs CPython
 ```
 
@@ -68,6 +71,14 @@ Five concepts, in the order they compose:
   records whose parents are missing are orphans, reported as such.
   Arrival order is never an input — the same set folds to the same
   state in any order.
+- **Retraction** is part of the fold, not an afterthought: a `dispute`
+  record accuses a target, a `settlement` record rules on the dispute,
+  and an upheld ruling voids the target's effects while the record
+  keeps its place in the graph — descendants are not orphaned, and the
+  retracted record lends no cleanliness to their tie-breaks. A
+  retraction the target's author neither filed nor settled is marked
+  **contested**, with its provenance: a ratified accusation is never a
+  silent void. Meta records never derive.
 - A **checkpoint** names a covered set of records (one chain head, or
   a frontier of several) plus a digest of the state they derive.
 - The **closure root** is a single hash over the covered set,
@@ -81,7 +92,9 @@ The port's shape (`lib/gitpp/`):
 - `Gitpp.Fold` — the fold as a pure function: records → state,
   conflicts (winner + preserved losers), application order, orphans;
   plus `verify_checkpoint/2` (v1, v2, and the frontier array form),
-  `checkpoint_root/2`, `witness_freshness/1`.
+  `checkpoint_root/2`, `witness_freshness/1`, and
+  `retraction_status/1` (dispute statuses, the retracted set, and the
+  contested markings).
 - `Gitpp.Canon` — the byte-level dialect layer: float64
   canonicalisation at ingest (DESIGN.md §5), CPython `json.dumps`
   canonical encoding (sort_keys / ensure_ascii / separators), and the
@@ -155,6 +168,22 @@ lesson the port keeps: a green suite proves agreement with the
 corpus you ran, and a port that isn't re-run against a growing corpus
 drifts in silence.
 
+**The scar: three readings the corpus overruled.** The 2026-11-02
+sync to git.pp-ng v0.2.0 (the retraction law: dispute + settlement,
+contested marking) found this port diverged in three older places
+too, each pinned by its own tests at the time. Orphanhood: §5.5 was
+read here as "descendants are NOT auto-orphaned"; the reference model
+propagates the exclusion (the corpus's prop-ghost case is the
+receipt). The leaf band: §3 was read as 1e16-scientific; the ruled
+band is 1e21 — exact integer digits — and the port's own float-fuzz
+oracle had the ruled form all along. String escaping: non-ASCII was
+emitted literally, defended by a "cross-port" leaf pin that turned
+out to be this port's own output; the reference leaf (ensure_ascii=
+True) differs, and the pin is corrected in place with its provenance
+recorded. The lesson compounds the frontier one: a test that pins a
+port's own output is a mirror, not a measurement — the corpus, diffed
+against an oracle it does not control, is the measurement.
+
 **Floats are where ports go to disagree.** Separately from the main
 corpus, the leaf-number encoding was fuzzed against CPython on
 10,018 doubles: zero mismatches (`conformance/float_fuzz.py` +
@@ -172,10 +201,12 @@ python3 conformance/float_fuzz.py > /tmp/floats.tsv
 mix run conformance/float_fuzz.exs /tmp/floats.tsv
 ```
 
-The totals above are the 2026-10-21 run against the grown corpus;
-the programme ledger (git.pp-ng `RESULTS.md` §1.6) records both this
-run and the original spike run (863/863 · 1,029 · 3,231 · 16,290)
-against the smaller corpus.
+The totals above are the 2026-11-02 run against git.pp-ng v0.2.0;
+the programme ledger (git.pp-ng `RESULTS.md` §1.6) records the
+earlier runs (863/863 · 1,029 · 3,231 · 16,290 against the original
+corpus; 898 · 1,056 · 3,259 · 16,574 against the grown one). This
+port's own release line starts at v0.1.0 — the first tag at full
+v0.2.0 parity, retraction law included.
 
 ## Siblings
 
